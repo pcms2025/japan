@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+import rospy
+import cv2
+from mr_voice.msg import Voice
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
+from std_msgs.msg import String
+from ultralytics import YOLO    
+from pcms.openvino_models import *
+from RobotChassis import RobotChassis
+import time
+from std_srvs.srv import Empty
+
+def micCallback(micmsg):
+	global txt
+	txt = micmsg
+    
+def depCallback(depmsg):
+	global dep
+	dep = CvBridge().imgmsg_to_cv2(depmsg)
+    
+def rgbCallback(imgmsg):
+	global img
+	img = CvBridge().imgmsg_to_cv2(imgmsg, "bgr8")
+
+if __name__ == "__main__":
+	rospy.init_node("follow")
+    
+	txt = None
+	rospy.Subscriber("/voice/text", Voice, micCallback)
+    
+	dep = None
+	rospy.Subscriber("/camera/depth/image_raw", Image, depCallback)
+    
+	img = None
+	rospy.Subscriber("/camera/rgb/image_raw", Image, rgbCallback)
+    
+	abc = Twist()
+	abcmd = rospy.Publisher("/cmd_vel", Twist, queue_size = 10)
+    
+	speaker = String()
+	SpeakerCmd = rospy.Publisher("/speaker/say", String, queue_size = 10)
+    
+	dnn_human_pose = HumanPoseEstimation()
+    
+	mod = YOLO("competition_bag.pt")
+    
+	chassis = RobotChassis()
+
+	dnn_yolo = YOLO("yolo11n.pt")
+    
+	word = "hello"
+    
+	proceed = 2
+    
+	idx = None
+    
+	distance = 1900
+    
+	Is_Follow = False
+    
+	left_bag = False
+    
+	stop_time = 2
+    
+	step = 0
+    
+	is_go_back = 0
+    
+	first_time = True
+    
+	clear_costmaps = rospy.ServiceProxy("/move_base/clear_costmaps", Empty)
+	time.sleep(6)
+    
+	SpeakerCmd.publish("I started")
+    
+	rate = rospy.Rate(20)
+    
+	while not rospy.is_shutdown():
+    	clear_costmaps
+    	rate.sleep()
+   	 
+    	if proceed == 1:
+        	if img is None:
+            	print("img is none")
+            	continue
+
+       	 
+        	img_ = img.copy()
+        	results = mod(img_)
+       	 
+        	#if txt is not None:
+        	#	if "find" in txt.text or "Find" in txt.text:
+        	#    	word = txt.text
+        	#	print(word)
+        	#	txt = None
+   	 
+        	poses = dnn_human_pose.forward(img_)
+   	 
+        	boxes = results[0].boxes.xyxy
+   	 
+        	# boxes
+        	# [
+        	#   [x1, y1, x2, y2],
+        	#   [x1, y1, x2, y2]
+        	# ]
+   	 
+        	box_id_L, box_id_R = -1, -1
+        	i = 0
+        	for x1,y1,x2,y2 in boxes:
+            	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+            	#cv2.rectangle(img_, (x1,y1), (x2,y2),(0,0,255),thickness=3)
+       	 
+            	if box_id_L == -1: box_id_L = i
+            	if box_id_R == -1: box_id_R = i
+       	 
+            	x_L = boxes[box_id_L][0]
+            	x_R = boxes[box_id_R][0]
+            	if x1 < x_L: box_id_L = i
+            	if x1 > x_R: box_id_R = i
+       	 
+            	i = i + 1
+       	 
+        	if box_id_L != -1:
+            	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+            	cv2.rectangle(img_, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        	if box_id_R != -1:
+            	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+            	cv2.rectangle(img_, (x1, y1), (x2, y2), (0, 0, 255), 3)
+       	 
+   	 
+        	h, w, c = img_.shape
+        	#if "Find" in word.split(" ") or "find" in word.split(" "):
+        	print("ok i will do this")
+   	 
+        	if box_id_L != -1 or box_id_R != -1:
+            	print("there is a bag")
+            	is_only_human = True
+            	for pose in poses:
+                	if is_only_human:
+                   	 
+                    	is_only_human = False
+                   	 
+                    	x5,y5,c5 = map(int, pose[5])
+                    	x9,y9,c9 = map(int, pose[9])
+                    	cv2.circle(img_, (x5,y5), 10, (255, 0, 255), 3)
+           	 
+                    	cv2.circle(img_, (x9,y9), 10, (255, 255, 0), 3)
+               	 
+                    	if x9 >= x5+30:
+                        	print("take the right bag")
+                        	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+                        	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                        	x_mid = (x1+x2)//2
+                   	 
+                        	speed = 0.1 / (w - w // 2) * (x_mid - w // 2)
+                   	 
+                        	print(speed)
+                       	 
+                        	print(x1)
+                        	print(x2)
+                        	print(y1)
+                        	print(y2)
+                   	 
+                        	abc.angular.z = -speed
+                       	 
+                        	if (w // 2) - 10 < x_mid and (w // 2) + 10 > x_mid:
+                            	abc.angular.z = 0.0
+                            	abcmd.publish(abc)
+                            	print("find bag finished")
+                            	SpeakerCmd.publish("I find the bag")
+                            	left_bag = False
+                           	 
+                            	depth = dep[y1:y2, x1:x2]
+                            	if depth[np.where(depth > 0)] != []:
+                           	 
+                                	idx = np.min(depth[np.where(depth > 0)])
+                               	 
+                                	print(idx)
+                           	 
+                            	#distance = dep[ (y1+y2)//8, (x1 + x2) // 2]
+                            	print(idx)
+                            	cv2.destroyAllWindows()
+                            	proceed = 1.5
+                       	 
+               	 
+                    	elif x9 <= x5-30:
+                        	print("take the left bag")
+                        	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+                        	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                        	x_mid = (x1+x2)//2
+                   	 
+                        	speed = 0.1 / (w // 2) * (x_mid - w // 2)
+               	 
+                        	print(speed)
+                       	 
+                        	print(x1)
+                        	print(x2)
+                        	print(y1)
+                        	print(y2)
+                   	 
+                        	abc.angular.z = -speed
+                       	 
+                        	if (w // 2) - 10 < x_mid and (w // 2) + 10 > x_mid:
+                            	abc.angular.z = 0.0
+                            	abcmd.publish(abc)
+                            	print("find bag finished")
+                            	SpeakerCmd.publish("I find the bag")
+                            	#distance = dep[(x1 + x2) // 2, (y1 + y2) // 2]
+                            	left_bag = True
+                           	 
+                            	depth = dep[y1:y2, x1:x2]
+                           	 
+                            	print(depth[np.where(depth > 0)])
+                           	 
+                            	if depth[np.where(depth > 0)] != []:
+                           	 
+                                	idx = np.min(depth[np.where(depth > 0)])
+                               	 
+                                	print(idx)
+                           	 
+                            	#print(distance)
+                            	cv2.destroyAllWindows()
+                            	proceed = 1.5
+               	 
+        	cv2.imshow("dman", img_)
+   	 
+        	abcmd.publish(abc)
+       	 
+        	key = cv2.waitKey(1)
+        	if key in [27, ord('q')]:
+            	break
+          	 
+          	 
+    	elif proceed == 1.5:
+       	 
+        	start = time.time()
+       	 
+        	while idx is None:
+       	 
+            	if img is None:
+                	continue
+       	 
+            	_img = img.copy()
+           	 
+            	results = mod(_img)
+            	boxes = results[0].boxes.xyxy
+           	 
+            	box_id_L, box_id_R = -1, -1
+            	i = 0
+           	 
+            	for x1,y1,x2,y2 in boxes:
+                	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                	#cv2.rectangle(img_, (x1,y1), (x2,y2),(0,0,255),thickness=3)
+       	 
+                	if box_id_L == -1: box_id_L = i
+                	if box_id_R == -1: box_id_R = i
+           	 
+                	x_L = boxes[box_id_L][0]
+                	x_R = boxes[box_id_R][0]
+                	if x1 < x_L: box_id_L = i
+                	if x1 > x_R: box_id_R = i
+       	 
+                	i = i + 1
+       	 
+            	if box_id_L != -1:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+                	cv2.rectangle(_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
+           	 
+            	if box_id_R != -1:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+                	cv2.rectangle(_img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+               	 
+            	if left_bag:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+                	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                	depth = dep[y1:y2, x1:x2]
+                       	 
+                	print(depth[np.where(depth > 0)])
+                       	 
+                	if depth[np.where(depth > 0)] != []:
+                       	 
+                    	idx = np.min(depth[np.where(depth > 0)])
+                           	 
+                    	print(idx)
+                   	 
+            	elif not left_bag:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+                	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                	depth = dep[y1:y2, x1:x2]
+                       	 
+                	print(depth[np.where(depth > 0)])
+                       	 
+                	if depth[np.where(depth > 0)] != []:
+                       	 
+                    	idx = np.min(depth[np.where(depth > 0)])
+                           	 
+                    	print(idx)
+               	 
+            	cv2.imshow("dman", _img)
+            	cv2.imshow("depth", dep)
+           	 
+            	if time.time() - start > 5:
+                	stop_time = 9
+   	 
+       	 
+        	abc.angular.z = 0.0
+        	abc.linear.x = 0.1
+        	abcmd.publish(abc)
+        	start = time.time()
+        	while True:
+            	if time.time() - start > ((idx / 100) - stop_time):
+                	break
+            	else:   
+                	abc.angular.z = 0.0    	 
+                	abc.linear.x = 0.1
+                	abcmd.publish(abc)
+               	 
+
+        	abc.linear.x = 0.0
+        	abcmd.publish(abc)
+        	SpeakerCmd.publish("i reached the bag, please put bag on the storing space, then I will follow you")
+        	rospy.sleep(5)
+        	proceed = 2
+   	 
+    	elif proceed == 2:
+    
+        	if img is None or dep is None:
+            	continue
+           	 
+        	_img = img.copy()
+        	_dep = dep.copy()
+   	 
+        	h, w, c = _img.shape
+   	 
+        	detects = dnn_yolo(_img)[0]
+        	boxes = detects.boxes
+   	 
+        	res = zip(boxes.cls, boxes.xyxy)
+   	 
+        	is_only_human = True
+    
+        	print(1)
+        	for c, XYXY in res:
+   	 
+            	if "follow" in word.split(" ") or "Follow" in word.split(" "):
+                	speaker = "OK, I will follow you"
+           	 
+                	first_time = False
+
+                	if is_only_human:
+                    	if c == 0:
+                       	 
+                        	is_go_back = 0
+                        	x1,y1,x2,y2 = map(int, XYXY)
+                        	if _dep[(y1 + y2) // 2, (x1 + x2) // 2] <= 2000 and _dep[(y1 + y2) // 2, (x1 + x2) // 2] != 0:
+                            	cv2.rectangle(_img,(x1, y1), (x2, y2) , (255,255,0), 5)
+               	 
+                            	x_people = (x1 + x2) // 2
+                            	speed_turn = (x_people - (w // 2)) * 0.002
+       	 
+                            	print(speed_turn)
+                       	 
+                            	abc.angular.z = -speed_turn
+                       	 
+                            	dis_to_human = dep[(h // 2), x_people] - 400
+                       	 
+                            	if dis_to_human * 0.00015 > 0.3:
+                                	abc.linear.x = 0.3
+                            	else:
+                                	abc.linear.x = dis_to_human * 0.00015
+                   	 
+                            	is_only_human = False
+            	elif "stop" in word.split(" ") or "Stop" in word.split(" "):
+                	speaker = "I will stop following"
+
+                	abc.angular.z = 0.0
+                	abc.linear.x = 0.0
+           	 
+                	rospy.sleep(2)
+               	 
+                	while is_go_back == 0 and not first_time:
+                    	if step == 0:
+                        	SpeakerCmd.publish("you now can take the bag out of my storing space, you have approximately 10 seconds")
+                        	rospy.sleep(13)
+                        	chassis.move_to(2.33, 4.65, -3.1415926 / 2)
+                        	step = 1
+                    	elif step == 1:
+   	 
+                        	code = chassis.status_code
+                        	text = chassis.status_text
+                        	if code == 0:   	# No plan.
+                            	pass
+                        	elif code == 1: 	# Processing.
+                            	pass
+                        	elif code == 3: 	# Reach point.
+                            	SpeakerCmd.publish("I arrived.")
+                            	step = 2
+                        	#elif code == 4: 	# No solution.
+                        	#	chassis.set_goal_in_rviz()
+                        	#	G = chassis.get_goal_pose()
+                        	#	rospy.loginfo("To %.2f, %.2f, %.2f" % (G[0], G[1], G[2]))
+                        	else:
+                            	rospy.loginfo("%d, %s" % (code, text))
+                    	elif step == 2:
+                        	SpeakerCmd.publish("finish")
+                        	step = 0
+                        	is_go_back = 1
+                        	break
+           	 
+   	 
+        	if not txt is None:
+       	 
+            	if "Follow" in txt.text or "follow" in txt.text or "stop" in txt.text or "Stop" in txt.text:
+                	word = txt.text
+                	print(word)
+                	SpeakerCmd.publish("ok")
+            	txt = None
+   	 
+        	cv2.imshow("rgb", _img)
+   	 
+        	abcmd.publish(abc)
+       	 
+        	abc.linear.x = 0.0
+        	abc.angular.z = 0.0
+   	 
+        	key = cv2.waitKey(1)
+        	if key in [27, ord('q')]:
+            	break
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+   	 
+    
+	
+
