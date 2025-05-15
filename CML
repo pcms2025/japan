@@ -1,0 +1,726 @@
+#!/usr/bin/env python3
+import rospy
+import cv2
+from mr_voice.msg import Voice
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist    	 
+from std_msgs.msg import String
+from ultralytics import YOLO    
+from pcms.openvino_models import *
+from RobotChassis import RobotChassis
+from std_srvs.srv import Empty
+import time
+
+def micCallback(micmsg):
+	global txt
+	txt = micmsg
+    
+def depCallback(depmsg):
+	global dep
+	dep = CvBridge().imgmsg_to_cv2(depmsg)
+    
+def rgbCallback(imgmsg):
+	global img
+	img = CvBridge().imgmsg_to_cv2(imgmsg, "bgr8")
+    
+if __name__ == "__main__":
+	rospy.init_node("bring_people")
+    
+	txt = None
+	rospy.Subscriber("/voice/text", Voice, micCallback)
+    
+	dep = None
+	rospy.Subscriber("/camera/depth/image_raw", Image, depCallback)
+    
+	img = None
+	rospy.Subscriber("/camera/rgb/image_raw", Image, rgbCallback)
+    
+	abc = Twist()
+	abcmd = rospy.Publisher("/cmd_vel", Twist, queue_size = 10)
+    
+	speaker = String()
+	SpeakerCmd = rospy.Publisher("/speaker/say", String, queue_size = 10)
+    
+	mod = YOLO("green_chair.pt")
+    
+	dnn_human_pose = HumanPoseEstimation()
+    
+	chassis = RobotChassis()
+    
+	dnn_yolo = YOLO("yolo11n.pt")
+    
+	word = "hello"
+    
+	is_go_back = 0
+	 
+	ask_name = True
+    
+	ask_drink = True
+    
+	found_host = False
+    
+	rate = rospy.Rate(20)
+    
+	proceed = 1
+    
+	first_time_two = True
+    
+	is_see_chair = 0
+    
+	step = 0
+    
+	names = ["adam", "Adam","axel", "Axel", "chris", "Chris", "hunter", "Hunter", "jack", "Jack", "max", "Max", "paris", "Paris", "robin", "Robin", "olivia", "Olivia", "william", "William"]
+	drinks = ["coke", "green tea", "wine", "orange juice", "sprite", "soda", "Coke", "Green tea", "Wine", "Orange juice", "Sprite", "Soda"]
+    
+	name = ""
+    
+	times = 1
+    
+	_name = ""
+    
+	answer_name = 0
+    
+	answer_drink = 0
+    
+	color = ("0")
+    
+    
+	chair_1 = [-1.79, 6.27, 0]
+    
+	chair_2 = [-1.46, 6.61, 0]
+    
+	chair_3 = [-1.15, 6.78, 0]
+    
+    
+    
+	#chair_1 = [0.9923, 8.35, 3.17]
+    
+	#chair_2 = [-1.45, 8.75, 3.15]
+    
+	#chair_3 = [-2.09, 9.06, 3.15]
+    
+	drink = ""
+    
+	_drink = ""
+    
+	clear_costmaps = rospy.ServiceProxy("/move_base/clear_costmaps", Empty)
+    
+	rospy.sleep(1)
+    
+	while not rospy.is_shutdown():
+    	clear_costmaps
+    	rate.sleep()
+    	if proceed == 1:
+        	if img is None:
+            	continue    
+           	 
+        	print("proceed 1")   	 
+           	 
+        	_img = img.copy()
+      	 
+        	h, w, c = _img.shape
+       	 
+        	x6,y6,c6 = map(int, pose[5])
+       	 
+        	x11,y11,c11 = map(int, pose[11])
+           	 
+        	cv2.circle(img_, (x6,y6), 10, (255, 0, 255), 3)
+        	cv2.circle(img_, (x11,y11), 10, (255, 0, 255), 3)
+       	 
+       	 
+       	 
+       	 
+        	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+        	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+        	depth = dep[y1:y2, x1:x2]
+               	 
+               	 
+               	 
+               	 
+        	print(depth[np.where(depth > 0)])
+               	 
+        	if depth[np.where(depth > 0)] != []:
+               	 
+            	idx = np.min(depth[np.where(depth > 0)])
+                   	 
+            	print(idx)          	 
+   	 
+        	detects = dnn_yolo(_img)[0]
+           	 
+        	boxes = detects.boxes
+           	 
+        	res = zip(boxes.cls, boxes.xyxy)
+           	 
+        	is_only_human = True
+       	 
+        	poses = dnn_human_pose.forward(_img)
+
+        	word = "hello"
+           	 
+        	print(1)
+       	 
+        	if txt is not None:
+           	 
+            	word = txt.text
+           	 
+            	if answer_name == 1:
+                	print(word)
+                	txt = None
+                	for i in names:
+                    	if i in word:
+                        	rospy.sleep(2)
+                        	SpeakerCmd.publish("is your name" + str(i))
+                        	print("is your name")
+                        	rospy.sleep(2)
+                        	_name = i
+                        	answer_name = 2
+                        	break
+                	if answer_name != 2:
+                    	rospy.sleep(2)
+                    	SpeakerCmd.publish("sorry I didn't hear it clearly. Can you repeat?")
+                    	print("sorry I didn't hear it clearly. Can you repeat?")
+                    	rospy.sleep(2)
+            	elif answer_name == 2:
+                	if "yes" in word or "Yes" in word:
+                    	name = _name
+                    	_name = ""
+                    	answer_name = 0
+                	elif "no" in word or "No" in word:
+                    	answer_name = 1
+                    	rospy.sleep(2)
+                    	word = ""
+                    	SpeakerCmd.publish("can you repeat your name?")
+                    	print("can you repeat your name?")
+                    	rospy.sleep(2)
+                   	 
+            	if answer_drink == 1:
+           	 
+                	print(word)
+                	txt = None
+                	for r in drinks:
+                    	if r in word:
+                        	rospy.sleep(2)
+                        	SpeakerCmd.publish("do you like to have" + str(r))
+                        	print("do you like to have")
+                        	rospy.sleep(2)
+                        	_drink = r
+                        	answer_drink = 2
+                        	break
+                	if answer_drink != 2:
+                    	rospy.sleep(2)
+                    	SpeakerCmd.publish("sorry I didn't hear it clearly. Can you repeat?")
+                    	print("sorry I didn't hear it clearly. Can you repeat?")
+                    	rospy.sleep(2)
+            	elif answer_drink == 2:
+                	if "yes" in word or "Yes" in word:
+                    	rospy.sleep(2)
+                    	drink = _drink
+                    	_drink = ""
+                    	answer_drink = 0
+                    	proceed = 2
+                	elif "no" in word or "No" in word:
+                    	answer_drink = 1
+                    	word = ""
+                    	rospy.sleep(2)
+                    	SpeakerCmd.publish("can you repeat what drink you want to have?")
+                    	print("can you repeat what drink you want to have?")
+                    	rospy.sleep(3)
+
+       	 
+        	if res == None:
+            	if ask_drink:
+                	ask_name = True
+            	else:
+                	ask_name = True
+                	ask_drink = True
+       	 
+        	for c, XYXY in res:
+
+            	if is_only_human:
+                	if c == 0:
+                    	x1,y1,x2,y2 = map(int, XYXY)
+                    	if dep[(y1 + y2) // 2, (x1 + x2) // 2] != 0 and dep[(y1 + y2) // 2, (x1 + x2) // 2] < 1500:
+                        	cv2.rectangle(_img,(x1, y1), (x2, y2) , (255,255,0), 5)
+                              	 
+                        	if ask_name:
+                            	rospy.sleep(2)
+    
+                            	SpeakerCmd.publish("Hello! Dear guest, what is your name?")
+                            	print("Hello! Dear guest, what is your name?")
+                            	rospy.sleep(4)
+                            	ask_name = False
+                            	answer_name = 1
+                           	 
+                        	if name != "" and ask_drink:
+                            	rospy.sleep(2)
+                       	 
+                            	SpeakerCmd.publish("can you tell me what drink you want to have?")
+                            	print("can you tell me what drink you want to have?")
+                            	rospy.sleep(4)
+                            	ask_drink = False
+                            	answer_drink = 1
+                       	 
+                           	 
+                   	 
+                       	 
+                	is_only_human = False
+        	cv2.imshow("vision", _img)
+       	 
+    	elif proceed == 2:
+   	 
+        	times = 1
+       	 
+        	while True:
+       	 
+            	rate.sleep()
+       	 
+            	print("proceed 2")
+           	 
+            	if img is None:
+                	continue
+           	 
+           	 
+            	if step == 0:
+                	if first_time_two:
+                    	SpeakerCmd.publish("OK, now follow me.")
+                    	print("Ok, now follow me")
+                    	first_time_two = False
+                    	rospy.sleep(2)
+                	if times == 1:
+                    	print("I am moving to chair 1.")
+                    	SpeakerCmd.publish("I am moving to chair 1.")
+                    	#rospy.sleep(2)
+                    	chassis.move_to(chair_1[0], chair_1[1], chair_1[2])
+                    	rospy.sleep(2)
+                    	times += 1
+                	elif times == 2:
+                    	print("I am moving to chair 2.")
+                    	SpeakerCmd.publish("I am moving to chair 2.")
+                    	#rospy.sleep(2)
+                    	chassis.move_to(chair_2[0], chair_2[1], chair_2[2])
+                    	rospy.sleep(2)
+                    	times += 1
+                	elif times == 3:
+                    	print("I am moving to chair 3.")
+                    	SpeakerCmd.publish("I am moving to chair 3.")
+                    	#rospy.sleep(2)
+                    	chassis.move_to(chair_3[0], chair_3[1], chair_3[2])
+                    	rospy.sleep(2)
+                    	times = 1
+                	print("step = 1")
+                	step = 1
+            	elif step == 1:
+                	code = chassis.status_code
+                	text = chassis.status_text
+                	print("step: 1, code: %d" % code)
+                	if code == 0:   	# No plan.
+                    	print("code 0")
+                    	pass
+                	elif code == 1: 	# Processing.
+                    	print("code 1")
+                    	pass
+                	elif code == 3: 	# Reach point.
+                    	SpeakerCmd.publish("I arrived.")
+                    	step = 2
+           	 
+           	 
+                	#elif code == 4: 	# No solution.
+                	#	chassis.set_goal_in_rviz()
+                	#	G = chassis.get_goal_pose()
+                	#	rospy.loginfo("To %.2f, %.2f, %.2f" % (G[0], G[1], G[2]))
+                	else:
+                    	rospy.loginfo("%d, %s" % (code, text))
+                    	step = 0
+            	elif step == 2:
+           	 
+                	print(222222)
+                	#SpeakerCmd.publish("hello, this is" + name + ", and he want a cup of" + drink + "I will bring the guest to the chair.")
+               	 
+                	start = time.time()
+               	 
+                	while True:
+               	 
+                    	rate.sleep()
+               	 
+                    	poses = dnn_human_pose.forward(img)
+                   	 
+                    	if poses == []:
+                        	step = 0
+                        	break
+                   	 
+                    	for pose in poses:
+                       	 
+                        	x5,y5,c5 = map(int, pose[5])
+                        	x6,y6,c6 = map(int, pose[6])
+                        	if x5 != 0 or x6 != 0:
+                            	x_middle = (x5 + x6) // 2
+                            	y_middle = (y5 + y6) // 2
+                            	cv2.circle(img, (x5,y5), 10, (255, 0, 255), 3)
+                            	cv2.circle(img, (x6,y6), 10, (255, 0, 255), 3)
+                            	if x_middle <= 340 or x_middle >= 300:
+                                	human_dis = dep[y_middle, x_middle]
+                                	if human_dis != 0 and human_dis < 1500:
+                                    	found_host = True
+                   	 
+                    	cv2.imshow("vision", img)
+                           	 
+                    	key = cv2.waitKey(1)
+                           	 
+                    	if time.time() - start >= 4:
+                        	break
+               	 
+                	step = 0
+               	 
+                	if found_host:
+                    	SpeakerCmd.publish("hello, this is" + name + ", and he want a cup of" + drink + "I will bring the guest to the chair.")
+                    	rospy.sleep(5)
+                    	found_host = False
+                    	break
+        	proceed = 3
+   	 
+#    	elif proceed == 2.5:
+ #  	 
+#        	while True:
+#           	 
+#            	if img is None:
+#                	continue
+#           	 
+#            	print('proceed 2.5')
+#           	 
+#            	img_ = img.copy()
+#      	 
+#            	h, w, c = img_.shape
+#           	 
+#            	detects = dnn_yolo(img_)[0]
+#               	 
+#            	boxes = detects.boxes
+#           	 
+#            	res = zip(boxes.cls, boxes.xyxy)
+#           	 
+#            	if times == 1:
+#           	 
+#                	for c, xyxy in res:
+ #                   	if c == 0:
+ #                       	x1,y1,x2,y2 = map(int, xyxy)
+#                        	cv2.rectangle(img_,(x1, y1), (x2, y2) , (155,255,155), 5)
+                       	 
+#                        	x_people = (x1 + x2) // 2
+#                        	speed_turn = (x_people - (w // 2)) * 0.002
+#                        	print(speed_turn)
+#                   	 
+#                        	abc.angular.z = -speed_turn
+#                   	 
+#                        	dis_to_human = dep[((y1 + y2) // 2), x_people] - 400
+#                   	 
+#                        	if dis_to_human * 0.00015 > 0.3:
+#                            	abc.linear.x = 0.3
+#                        	else:
+#                            	abc.linear.x = dis_to_human * 0.00015
+#                           	 
+#                        	abcmd.publish(abc)
+#                           	 
+#                        	if x_people > ((w // 2) - 10) or x_people < ((w // 2) + 10):
+#                            	if dis_to_human < 10 or dis_to_human > 10:
+#                                	found_host = True
+#                                	abc.linear.x = 0.0
+#                                	abc.angular.z = 0.0
+#                                	abcmd.publish(abc)
+#                               	 
+#            	#if times == 2:
+#               	 
+               	 
+               	 
+                       	 
+
+#            	print("img printed")
+#           	 
+#            	cv2.imshow("vision_2", img_)
+#           	 
+#            	abcmd.publish(abc)
+#           	 
+#            	if found_host:
+#                	found_host == False
+#                	SpeakerCmd.publish("hello, this is" + name + ", and he want a cup of" + drink + "I will bring the guest to the chair.")
+#                	rospy.sleep(5)
+#                	proceed = 3
+#                	break
+   	 
+    	elif proceed == 3:
+   	 
+        	step = 0
+       	 
+        	rospy.sleep(2)
+  	 
+        	while True:
+       	 
+            	rate.sleep()
+       	 
+            	print("proceed 3")
+            	if img is None:
+                	continue
+           	 
+            	if step == 0:
+                	if times == 1:
+                    	print("I am moving to chair 1.")
+                    	SpeakerCmd.publish("I am moving to chair 1.")
+                    	rospy.sleep(2)
+                    	chassis.move_to(chair_1[0], chair_1[1], chair_1[2])
+                    	rospy.sleep(2)
+                    	times += 1
+                	elif times == 2:
+                    	print("I am moving to chair 2.")
+                    	SpeakerCmd.publish("I am moving to chair 2.")
+                    	rospy.sleep(2)
+                    	chassis.move_to(chair_2[0], chair_2[1], chair_2[2])
+                    	rospy.sleep(2)
+                    	times += 1
+                	elif times == 3:
+                    	print("I am moving to chair 3.")
+                    	SpeakerCmd.publish("I am moving to chair 3.")
+                    	rospy.sleep(2)
+                    	chassis.move_to(chair_3[0], chair_3[1], chair_3[2])
+                    	rospy.sleep(2)
+                    	times = 1
+                	step = 1
+            	elif step == 1:
+                	code = chassis.status_code
+                	text = chassis.status_text
+                	if code == 0:   	# No plan.
+                    	print("code 0")
+                    	pass
+                	elif code == 1: 	# Processing.
+                    	print("code 1")
+                    	pass
+                	elif code == 3: 	# Reach point.
+                    	SpeakerCmd.publish("I arrived.")
+                    	step = 2
+           	 
+           	 
+                	#elif code == 4: 	# No solution.
+                	#	chassis.set_goal_in_rviz()
+                	#	G = chassis.get_goal_pose()
+                	#	rospy.loginfo("To %.2f, %.2f, %.2f" % (G[0], G[1], G[2]))
+                	else:
+                    	rospy.loginfo("%d, %s" % (code, text))
+                    	step = 2
+            	elif step == 2:
+                	SpeakerCmd.publish("hello, this is" + name + ", and he want a cup of" + drink + "I will bring the guest to the chair.")
+               	 
+                	start = time.time()
+               	 
+                	while True:
+               	 
+                    	rate.sleep()
+                   	 
+                    	poses = dnn_human_pose.forward(img)
+                   	 
+                    	if poses == []:
+                        	found_host = False
+                        	break
+                   	 
+                    	for pose in poses:
+                        	x5,y5,c5 = map(int, pose[5])
+                        	x6,y6,c6 = map(int, pose[6])
+                       	 
+                        	x_middle = (x5 + x6) // 2
+                        	y_middle = (y5 + y6) // 2
+                        	cv2.circle(img, (x5,y5), 10, (255, 0, 255), 3)
+                        	cv2.circle(img, (x6,y6), 10, (255, 0, 255), 3)
+                        	if x_middle >= 340 or x_middle <= 300:
+                            	human_dis = dep[y_middle, x_middle]
+                            	if human_dis == 0 or human_dis > 1500:
+                                	found_host = False
+                   	 
+                    	if time.time() - start >= 4:
+                        	break
+               	 
+                	step = 0
+               	 
+                	cv2.imshow("vision", img)
+                           	 
+                	key = cv2.waitKey(1)
+               	 
+                	if not found_host:
+                    	SpeakerCmd.publish("Dear guest, There is your seat, please sit here")
+                    	rospy.sleep(5)
+                    	found_host = True
+                    	break
+        	proceed = 5
+           	 
+           	 
+          	 
+    	elif proceed == 4:
+        	while True:
+           	 
+            	rate.sleep()
+           	 
+            	if img is None:
+                	continue
+           	 
+            	print('proceed 4')
+           	 
+            	img_ = img.copy()
+      	 
+            	h, w, c = img_.shape
+           	 
+            	results = mod(img_)[0]
+       	 
+               	 
+            	boxes = results.boxes.xyxy
+       	 
+            	# boxes
+            	# [
+            	#   [x1, y1, x2, y2],
+            	#   [x1, y1, x2, y2]
+            	# ]
+       	 
+            	box_id_L, box_id_R = -1, -1
+            	i = 0
+            	for x1,y1,x2,y2 in boxes:
+                	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                	#cv2.rectangle(img_, (x1,y1), (x2,y2),(0,0,255),thickness=3)
+           	 
+                	if box_id_L == -1: box_id_L = i
+                	if box_id_R == -1: box_id_R = i
+               	 
+                	x_L = boxes[box_id_L][0]
+                	x_R = boxes[box_id_R][0]
+                	if x1 < x_L: box_id_L = i
+                	if x1 > x_R: box_id_R = i
+               	 
+                	i = i + 1
+               	 
+            	if box_id_L != -1:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_L])
+                	cv2.rectangle(img_, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            	if box_id_R != -1:
+                	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+                	cv2.rectangle(img_, (x1, y1), (x2, y2), (0, 0, 255), 3)
+
+               	 
+            	if box_id_L != -1 or box_id_R != -1:
+                   	 
+                	x1, y1, x2, y2 = map(int, boxes[box_id_R])
+                	x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+                	x_mid = (x1+x2)//2
+                       	 
+                	speed = 0.3 / (w - w // 2) * (x_mid - w // 2)
+                       	 
+                	print(speed)
+                       	 
+                	abc.angular.z = -speed
+                           	 
+                	if (w // 2) - 5 < x_mid and (w // 2) + 5 > x_mid:
+                    	abc.angular.z = 0.0
+                    	abcmd.publish(abc)
+                    	print("find chair finished")
+                    	speakercmd.publish("Dear guest, please sit here and wait until the meeting start")
+                    	cv2.destroyAllWindows()
+                    	proceed = 5
+                    	break
+           	 
+            	detects = dnn_yolo(img_)[0]
+               	 
+            	boxes = detects.boxes
+           	 
+            	res = zip(boxes.cls, boxes.xyxy)
+           	 
+            	for c, xyxy in res:
+                	if c == 0:
+                    	x1,y1,x2,y2 = map(int, xyxy)
+                    	cv2.rectangle(img_,(x1, y1), (x2, y2) , (255,255,255), 5)
+                   	 
+            	print("img printed")
+           	 
+            	cv2.imshow("vision", img_)
+           	 
+    	elif proceed == 5:
+  	 
+        	while True:
+            	print("proceed 5")
+            	if step == 0:
+                	#SpeakerCmd.publish("OK, now follow me.")
+                	chassis.move_to(2.59, 3.24, 3.1415926 / 2)
+                	step = 1
+            	elif step == 1:
+                	code = chassis.status_code
+                	text = chassis.status_text
+                	if code == 0:   	# No plan.
+                    	pass
+                	elif code == 1: 	# Processing.
+                    	pass
+                	elif code == 3: 	# Reach point.
+                    	#SpeakerCmd.publish("I arrived.")
+                    	print("I arrived")
+                    	step = 2
+           	 
+           	 
+                	#elif code == 4: 	# No solution.
+                	#	chassis.set_goal_in_rviz()
+                	#	G = chassis.get_goal_pose()
+                	#	rospy.loginfo("To %.2f, %.2f, %.2f" % (G[0], G[1], G[2]))
+                	else:
+                    	rospy.loginfo("%d, %s" % (code, text))
+                    	step = 2
+            	elif step == 2:
+                	word = "hello"
+    
+                	is_go_back = 0
+	 
+                	ask_name = True
+    
+                	ask_drink = True
+               	 
+                	found_host = False
+    
+                	proceed = 1
+    
+                	first_time_two = True
+    
+                	is_see_chair = 0
+    
+                	step = 0
+    
+                	name = ""
+    
+                	times = 1
+    
+                	_name = ""
+    
+                	answer_name = 0
+    
+                	answer_drink = 0
+    
+                	drink = ""
+    
+                	_drink = ""
+                	step = 0
+                	break
+        	proceed = 1
+              	 
+    	key = cv2.waitKey(1)
+    	if key in [ord('q'), 27]:
+        	cv2.destroyAllWindows()
+        	break
+   	 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
